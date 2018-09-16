@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -21,6 +23,12 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
+)
+
+var (
+	users     map[int64]*User
+	usersName map[string]*User
+	userLock  sync.Mutex
 )
 
 type User struct {
@@ -169,9 +177,11 @@ func getLoginUser(c echo.Context) (*User, error) {
 	if userID == 0 {
 		return nil, errors.New("not logged in")
 	}
-	var user User
-	err := db.QueryRow("SELECT id, nickname FROM users WHERE id = ?", userID).Scan(&user.ID, &user.Nickname)
-	return &user, err
+	u, ok := users[userID]
+	if !ok {
+		return nil, fmt.Errorf("User not found: %v", userID)
+	}
+	return u, nil
 }
 
 func getLoginAdministrator(c echo.Context) (*Administrator, error) {
@@ -376,6 +386,24 @@ func main() {
 			log.Printf("failed to start profile; %v", err)
 		}
 
+		users = make(map[int64]*User)
+		usersName = make(map[string]*User)
+		rows, err := db.Query("SELECT id, nickname, login_name, pass_hash FROM users")
+		if err != nil {
+			fmt.Println(err)
+			return c.NoContent(500)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var u User
+			if err := rows.Scan(&u.ID, &u.Nickname, &u.LoginName, &u.PassHash); err != nil {
+				fmt.Println(err)
+				c.NoContent(500)
+			}
+			users[u.ID] = &u
+			usersName[u.LoginName] = &u
+		}
+
 		return c.NoContent(204)
 	})
 	e.POST("/api/users", func(c echo.Context) error {
@@ -386,33 +414,26 @@ func main() {
 		}
 		c.Bind(&params)
 
-		tx, err := db.Begin()
-		if err != nil {
-			return err
+		userLock.Lock()
+		defer userLock.Unlock()
+		user, ok := usersName[params.LoginName]
+		if ok {
+			return resError(c, "duplicated", 409)
 		}
 
-		var user User
-		if err := tx.QueryRow("SELECT * FROM users WHERE login_name = ?", params.LoginName).Scan(&user.ID, &user.LoginName, &user.Nickname, &user.PassHash); err != sql.ErrNoRows {
-			tx.Rollback()
-			if err == nil {
-				return resError(c, "duplicated", 409)
-			}
-			return err
-		}
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(params.Password)))
 
-		res, err := tx.Exec("INSERT INTO users (login_name, pass_hash, nickname) VALUES (?, SHA2(?, 256), ?)", params.LoginName, params.Password, params.Nickname)
+		res, err := db.Exec("INSERT INTO users (login_name, pass_hash, nickname) VALUES (?, ?, ?)", params.LoginName, params.Password, params.Nickname)
 		if err != nil {
-			tx.Rollback()
 			return resError(c, "", 0)
 		}
 		userID, err := res.LastInsertId()
 		if err != nil {
-			tx.Rollback()
 			return resError(c, "", 0)
 		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+		user = &User{userID, params.Nickname, params.LoginName, hash}
+		users[userID] = user
+		usersName[params.LoginName] = user
 
 		return c.JSON(201, echo.Map{
 			"id":       userID,
@@ -420,9 +441,13 @@ func main() {
 		})
 	})
 	e.GET("/api/users/:id", func(c echo.Context) error {
-		var user User
-		if err := db.QueryRow("SELECT id, nickname FROM users WHERE id = ?", c.Param("id")).Scan(&user.ID, &user.Nickname); err != nil {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil {
 			return err
+		}
+		user, ok := users[int64(id)]
+		if !ok {
+			return fmt.Errorf("user not found: %d", id)
 		}
 
 		loginUser, err := getLoginUser(c)
@@ -515,18 +540,12 @@ func main() {
 		}
 		c.Bind(&params)
 
-		user := new(User)
-		if err := db.QueryRow("SELECT * FROM users WHERE login_name = ?", params.LoginName).Scan(&user.ID, &user.LoginName, &user.Nickname, &user.PassHash); err != nil {
-			if err == sql.ErrNoRows {
-				return resError(c, "authentication_failed", 401)
-			}
-			return err
+		user, ok := usersName[params.LoginName]
+		if !ok {
+			return resError(c, "authentication_failed", 401)
 		}
 
-		var passHash string
-		if err := db.QueryRow("SELECT SHA2(?, 256)", params.Password).Scan(&passHash); err != nil {
-			return err
-		}
+		passHash := fmt.Sprintf("%x", sha256.Sum256([]byte(params.Password)))
 		if user.PassHash != passHash {
 			return resError(c, "authentication_failed", 401)
 		}
