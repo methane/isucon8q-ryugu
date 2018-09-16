@@ -124,8 +124,8 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	}
 
 	num := sheetID - start + 1
-	log.Printf("reserved event=%v, sheetID=%v, sheetNum=%v, userID=%v",
-		eventID, sheetID, num, userID)
+	//log.Printf("reserved event=%v, sheetID=%v, sheetNum=%v, userID=%v",
+	//	eventID, sheetID, num, userID)
 	eventReservedFlags[eventID][sheetID] = userID
 	eventReservations[eventID] = append(
 		eventReservations[eventID], Reservation{ID: id, EventID: eventID, SheetID: sheetID, UserID: userID, ReservedAt: &now})
@@ -144,8 +144,8 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 	case "C":
 		sheetID = sheetNum + 500
 	}
-	log.Printf("cancelling event=%v, sheetID=%v, rank=%v, sheetNum=%v, userID=%v",
-		eventID, sheetID, rank, sheetNum, userID)
+	//log.Printf("cancelling event=%v, sheetID=%v, rank=%v, sheetNum=%v, userID=%v",
+	//	eventID, sheetID, rank, sheetNum, userID)
 
 	mReservation.Lock()
 	defer mReservation.Unlock()
