@@ -109,4 +109,6 @@ func init() {
 			w.Write([]byte("profile started\n"))
 		}
 	})
+
+	go http.ListenAndServe(":3000", nil)
 }
