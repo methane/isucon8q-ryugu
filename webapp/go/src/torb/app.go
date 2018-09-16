@@ -26,8 +26,8 @@ import (
 )
 
 var (
-	users     map[int64]*User
-	usersName map[string]*User
+	users     map[int64]*User  = make(map[int64]*User)
+	usersName map[string]*User = make(map[string]*User)
 	userLock  sync.Mutex
 )
 
@@ -423,13 +423,13 @@ func main() {
 
 		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(params.Password)))
 
-		res, err := db.Exec("INSERT INTO users (login_name, pass_hash, nickname) VALUES (?, ?, ?)", params.LoginName, params.Password, params.Nickname)
+		res, err := db.Exec("INSERT INTO users (login_name, pass_hash, nickname) VALUES (?, ?, ?)", params.LoginName, hash, params.Nickname)
 		if err != nil {
-			return resError(c, "", 0)
+			return resError(c, "insert fail", 0)
 		}
 		userID, err := res.LastInsertId()
 		if err != nil {
-			return resError(c, "", 0)
+			return resError(c, "unknown id", 0)
 		}
 		user = &User{userID, params.Nickname, params.LoginName, hash}
 		users[userID] = user
