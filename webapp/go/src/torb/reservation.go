@@ -54,10 +54,10 @@ func initReservation() {
 	}
 }
 
-func getReservationForEvent(eventID int64) []Reservation {
+func getReservationForEvent(eventID int64) ([]Reservation, []int64) {
 	mReservation.Lock()
 	defer mReservation.Unlock()
-	return eventReservations[eventID]
+	return eventReservations[eventID], eventReservedFlags[eventID]
 }
 
 func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
