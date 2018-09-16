@@ -334,8 +334,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
+	//db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(400)
 	db.SetConnMaxLifetime(time.Minute * 10)
 
 	for {
