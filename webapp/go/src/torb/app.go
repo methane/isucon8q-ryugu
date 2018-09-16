@@ -234,6 +234,19 @@ func getEvents(all bool) ([]*Event, error) {
 	return events, nil
 }
 
+func sheetInfo(id int64) Sheet {
+	switch {
+	case id <= 50:
+		return Sheet{ID: id, Rank: "S", Num: id, Price: 5000}
+	case id <= 200:
+		return Sheet{ID: id, Rank: "A", Num: id - 50, Price: 3000}
+	case id <= 500:
+		return Sheet{ID: id, Rank: "B", Num: id - 200, Price: 1000}
+	default:
+		return Sheet{ID: id, Rank: "C", Num: id - 500, Price: 0}
+	}
+}
+
 func getEvent(eventID, loginUserID int64) (*Event, error) {
 	var event Event
 	if err := db.QueryRow("SELECT * FROM events WHERE id = ?", eventID).Scan(&event.ID, &event.Title, &event.PublicFg, &event.ClosedFg, &event.Price); err != nil {
@@ -246,17 +259,12 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		"C": &Sheets{},
 	}
 
-	rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	//reservations := getReservationForEvent(eventID)
+	// ここを効率化
 
-	for rows.Next() {
-		var sheet Sheet
-		if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
-			return nil, err
-		}
+	var sheetID int64
+	for sheetID = 1; sheetID <= 1000; sheetID++ {
+		sheet := sheetInfo(sheetID)
 		event.Sheets[sheet.Rank].Price = event.Price + sheet.Price
 		event.Total++
 		event.Sheets[sheet.Rank].Total++
@@ -307,9 +315,12 @@ func fillinAdministrator(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 func validateRank(rank string) bool {
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM sheets WHERE `rank` = ?", rank).Scan(&count)
-	return count > 0
+	switch rank {
+	case "S", "A", "B", "C":
+		return true
+	default:
+		return false
+	}
 }
 
 type Renderer struct {
@@ -346,6 +357,7 @@ func main() {
 		log.Printf("Failed to PING db: %v", err)
 		time.Sleep(time.Second * 5)
 	}
+	initReservation()
 
 	e := echo.New()
 	funcs := template.FuncMap{
@@ -382,6 +394,9 @@ func main() {
 		if err != nil {
 			return nil
 		}
+
+		initReservation()
+
 		if err := StartProfile(time.Minute); err != nil {
 			log.Printf("failed to start profile; %v", err)
 		}
@@ -622,45 +637,17 @@ func main() {
 			return resError(c, "invalid_rank", 400)
 		}
 
-		var sheet Sheet
-		var reservationID int64
-		for {
-			if err := db.QueryRow("SELECT * FROM sheets WHERE id NOT IN (SELECT sheet_id FROM reservations WHERE event_id = ? AND canceled_at IS NULL FOR UPDATE) AND `rank` = ? ORDER BY RAND() LIMIT 1", event.ID, params.Rank).Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
-				if err == sql.ErrNoRows {
-					return resError(c, "sold_out", 409)
-				}
-				return err
-			}
-
-			tx, err := db.Begin()
-			if err != nil {
-				return err
-			}
-
-			res, err := tx.Exec("INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)", event.ID, sheet.ID, user.ID, time.Now().UTC().Format("2006-01-02 15:04:05.000000"))
-			if err != nil {
-				tx.Rollback()
-				log.Println("re-try: rollback by", err)
-				continue
-			}
-			reservationID, err = res.LastInsertId()
-			if err != nil {
-				tx.Rollback()
-				log.Println("re-try: rollback by", err)
-				continue
-			}
-			if err := tx.Commit(); err != nil {
-				tx.Rollback()
-				log.Println("re-try: rollback by", err)
-				continue
-			}
-
-			break
+		reservationID, sheetNum, err := doReserve(eventID, user.ID, params.Rank)
+		if err == FullReserved {
+			return resError(c, "sold_out", 409)
+		} else if err != nil {
+			return err
 		}
+
 		return c.JSON(202, echo.Map{
 			"id":         reservationID,
 			"sheet_rank": params.Rank,
-			"sheet_num":  sheet.Num,
+			"sheet_num":  sheetNum,
 		})
 	}, loginRequired)
 	e.DELETE("/api/events/:id/sheets/:rank/:num/reservation", func(c echo.Context) error {
@@ -690,38 +677,35 @@ func main() {
 			return resError(c, "invalid_rank", 404)
 		}
 
-		var sheet Sheet
-		if err := db.QueryRow("SELECT * FROM sheets WHERE `rank` = ? AND num = ?", rank, num).Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
-			if err == sql.ErrNoRows {
-				return resError(c, "invalid_sheet", 404)
-			}
-			return err
-		}
-
-		tx, err := db.Begin()
+		sheetNum, err := strconv.Atoi(num)
 		if err != nil {
-			return err
+			return resError(c, "invalid_num", 404)
+		}
+		var maxSheetNum int
+		switch rank {
+		case "S":
+			maxSheetNum = 50
+		case "A":
+			maxSheetNum = 150
+		case "B":
+			maxSheetNum = 300
+		case "C":
+			maxSheetNum = 500
+		default:
+			return resError(c, "invalid_rank", 404)
+		}
+		if sheetNum > maxSheetNum {
+			return resError(c, "invalid_sheet", 404)
 		}
 
-		var reservation Reservation
-		if err := tx.QueryRow("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id HAVING reserved_at = MIN(reserved_at) FOR UPDATE", event.ID, sheet.ID).Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt); err != nil {
-			tx.Rollback()
-			if err == sql.ErrNoRows {
-				return resError(c, "not_reserved", 400)
-			}
-			return err
+		err = cancelReservation(eventID, int64(sheetNum), user.ID, rank)
+		if err == NotReserved {
+			return resError(c, "not_reserved", 400)
 		}
-		if reservation.UserID != user.ID {
-			tx.Rollback()
+		if err == NotOwner {
 			return resError(c, "not_permitted", 403)
 		}
-
-		if _, err := tx.Exec("UPDATE reservations SET canceled_at = ? WHERE id = ?", time.Now().UTC().Format("2006-01-02 15:04:05.000000"), reservation.ID); err != nil {
-			tx.Rollback()
-			return err
-		}
-
-		if err := tx.Commit(); err != nil {
+		if err != nil {
 			return err
 		}
 
