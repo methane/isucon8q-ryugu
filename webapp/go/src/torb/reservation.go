@@ -87,7 +87,6 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 		end = 1000
 	}
 
-	//TODO: random
 	var sheetID int64
 
 	x := rand.Int63n(end-start+1) + start

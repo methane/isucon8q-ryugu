@@ -259,8 +259,6 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		"C": &Sheets{},
 	}
 
-	//reservations := getReservationForEvent(eventID)
-	// ここを効率化
 	reservations, reservedSheets := getReservationForEvent(eventID)
 	if len(reservedSheets) == 0 {
 		reservedSheets = make([]int64, 1001)
@@ -781,22 +779,12 @@ func main() {
 		}
 		c.Bind(&params)
 
-		tx, err := db.Begin()
+		res, err := db.Exec("INSERT INTO events (title, public_fg, closed_fg, price) VALUES (?, ?, 0, ?)", params.Title, params.Public, params.Price)
 		if err != nil {
-			return err
-		}
-
-		res, err := tx.Exec("INSERT INTO events (title, public_fg, closed_fg, price) VALUES (?, ?, 0, ?)", params.Title, params.Public, params.Price)
-		if err != nil {
-			tx.Rollback()
 			return err
 		}
 		eventID, err := res.LastInsertId()
 		if err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
 			return err
 		}
 
@@ -849,15 +837,7 @@ func main() {
 			return resError(c, "cannot_close_public_event", 400)
 		}
 
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec("UPDATE events SET public_fg = ?, closed_fg = ? WHERE id = ?", params.Public, params.Closed, event.ID); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
+		if _, err := db.Exec("UPDATE events SET public_fg = ?, closed_fg = ? WHERE id = ?", params.Public, params.Closed, event.ID); err != nil {
 			return err
 		}
 
