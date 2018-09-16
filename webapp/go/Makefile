@@ -10,3 +10,10 @@ deps:
 .PHONY: build
 build:
 	GOPATH=`pwd`:`pwd`/vendor go build -v torb
+
+
+deploy:
+	$(MAKE) -C ~ deploy
+
+
+.PHONY: deploy
