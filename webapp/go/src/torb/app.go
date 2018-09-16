@@ -184,14 +184,8 @@ func getLoginAdministrator(c echo.Context) (*Administrator, error) {
 	return &administrator, err
 }
 
-func getEvents(all bool) ([]*Event, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Commit()
-
-	rows, err := tx.Query("SELECT * FROM events ORDER BY id ASC")
+func fetchEvents(all bool) ([]*Event, error) {
+	rows, err := db.Query("SELECT * FROM events ORDER BY id ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +202,15 @@ func getEvents(all bool) ([]*Event, error) {
 		}
 		events = append(events, &event)
 	}
+	return events, nil
+}
+
+func getEvents(all bool) ([]*Event, error) {
+	events, err := fetchEvents(all)
+	if err != nil {
+		return nil, err
+	}
+
 	for i, v := range events {
 		event, err := getEvent(v.ID, -1)
 		if err != nil {
