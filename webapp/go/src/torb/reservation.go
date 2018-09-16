@@ -184,7 +184,7 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 		eventReservations[eventID][ri+1:]...)
 	eventReservedFlags[eventID][sheetID] = 0
 
-	log.Printf("canceled event=%v, sheetID=%v, sheetNum=%v, userID=%v",
-		eventID, sheetID, sheetNum, userID)
+	//log.Printf("canceled event=%v, sheetID=%v, sheetNum=%v, userID=%v",
+	//	eventID, sheetID, sheetNum, userID)
 	return nil
 }
