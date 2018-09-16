@@ -357,6 +357,9 @@ func main() {
 		if err != nil {
 			return nil
 		}
+		if err := StartProfile(time.Minute); err != nil {
+			log.Printf("failed to start profile; %v", err)
+		}
 
 		return c.NoContent(204)
 	})
