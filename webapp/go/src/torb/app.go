@@ -920,11 +920,13 @@ func main() {
 		return renderReportCSV(c, reports)
 	}, adminLoginRequired)
 
-	ln, err := net.Listen("unix", "/var/run/torb.sock")
+	os.Remove("/tmp/torb.sock")
+	ln, err := net.Listen("unix", "/tmp/torb.sock")
 	if err != nil {
 		panic(err)
 	}
 	e.Listener = ln
+	log.Print(os.Chmod("/tmp/torb.sock", 0777))
 	log.Print(e.Start(""))
 	//log.Print(e.Start(":8080"))
 }
