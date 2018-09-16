@@ -73,7 +73,7 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	var start, end int64
 	switch rank {
 	case "S":
-		start = 0
+		start = 1
 		end = 50
 		break
 	case "A":
@@ -90,7 +90,7 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	//TODO: random
 	var sheetID int64
 
-	x := rand.Int63n(end-start) + start
+	x := rand.Int63n(end-start+1) + start
 	for i := x; i <= end; i++ {
 		if m[i] == 0 {
 			sheetID = i
@@ -99,7 +99,7 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	}
 	if sheetID == 0 {
 		var i int64
-		for i = 0; i < x; i++ {
+		for i = start; i < x; i++ {
 			if m[i] == 0 {
 				sheetID = i
 				break
@@ -124,10 +124,13 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 		return 0, 0, err
 	}
 
-	m[sheetID] = userID
+	num := sheetID - start + 1
+	log.Printf("reserved event=%v, sheetID=%v, sheetNum=%v, userID=%v",
+		eventID, sheetID, num, userID)
+	eventReservedFlags[eventID][sheetID] = userID
 	eventReservations[eventID] = append(
 		eventReservations[eventID], Reservation{ID: id, EventID: eventID, SheetID: sheetID, UserID: userID, ReservedAt: &now})
-	return id, id - start, nil
+	return id, num, nil
 }
 
 func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
@@ -142,15 +145,19 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 	case "C":
 		sheetID = sheetNum + 500
 	}
+	log.Printf("cancelling event=%v, sheetID=%v, rank=%v, sheetNum=%v, userID=%v",
+		eventID, sheetID, rank, sheetNum, userID)
 
 	mReservation.Lock()
 	defer mReservation.Unlock()
 
 	m, ok := eventReservedFlags[eventID]
 	if !ok || m[sheetID] == 0 {
+		log.Println("not reserved")
 		return NotReserved
 	}
 	if m[sheetID] != userID {
+		log.Printf("not owner: owner=%v", m[sheetID])
 		return NotOwner
 	}
 
@@ -178,5 +185,7 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 		eventReservations[eventID][ri+1:]...)
 	eventReservedFlags[eventID][sheetID] = 0
 
+	log.Printf("canceled event=%v, sheetID=%v, sheetNum=%v, userID=%v",
+		eventID, sheetID, sheetNum, userID)
 	return nil
 }
