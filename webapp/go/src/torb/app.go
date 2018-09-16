@@ -264,6 +264,11 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		reservedSheets = make([]int64, 1001)
 	}
 
+	reservedAtMap := make(map[int64]int64)
+	for _, r := range reservations {
+		reservedAtMap[r.SheetID] = r.ReservedAt.Unix()
+	}
+
 	var sheetID int64
 	for sheetID = 1; sheetID <= 1000; sheetID++ {
 		sheet := sheetInfo(sheetID)
@@ -274,13 +279,7 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		if reservedSheets[sheetID] != 0 {
 			sheet.Mine = reservedSheets[sheetID] == loginUserID
 			sheet.Reserved = true
-			for _, r := range reservations {
-				if r.SheetID == sheetID {
-					sheet.ReservedAtUnix = r.ReservedAt.Unix()
-					break
-				}
-			}
-			//sheet.ReservedAtUnix = reservation.ReservedAt.Unix()
+			sheet.ReservedAtUnix = reservedAtMap[sheetID]
 		} else {
 			event.Remains++
 			event.Sheets[sheet.Rank].Remains++
