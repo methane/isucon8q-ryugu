@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
@@ -919,7 +920,13 @@ func main() {
 		return renderReportCSV(c, reports)
 	}, adminLoginRequired)
 
-	log.Print(e.Start(":8080"))
+	ln, err := net.Listen("unix", "/var/run/torb.sock")
+	if err != nil {
+		panic(err)
+	}
+	e.Listener = ln
+	log.Print(e.Start(""))
+	//log.Print(e.Start(":8080"))
 }
 
 type Report struct {
