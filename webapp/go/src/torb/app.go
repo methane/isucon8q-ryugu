@@ -340,7 +340,11 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 
 var db *sql.DB
 
-func main() {
+func initdb() {
+	if db != nil {
+		db.Close()
+		db = nil
+	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4&interpolateParams=true",
 		os.Getenv("DB_USER"), os.Getenv("DB_PASS"),
 		os.Getenv("DB_HOST"), os.Getenv("DB_PORT"),
@@ -364,6 +368,11 @@ func main() {
 		log.Printf("Failed to PING db: %v", err)
 		time.Sleep(time.Second * 5)
 	}
+}
+
+func main() {
+	var err error
+	initdb()
 	initReservation()
 
 	e := echo.New()
@@ -402,6 +411,7 @@ func main() {
 			return nil
 		}
 
+		initdb()
 		initReservation()
 
 		if err := StartProfile(time.Minute); err != nil {
