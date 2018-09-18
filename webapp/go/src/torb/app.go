@@ -404,9 +404,9 @@ func main() {
 
 		initReservation()
 
-		//if err := StartProfile(time.Minute); err != nil {
-		//	log.Printf("failed to start profile; %v", err)
-		//}
+		if err := StartProfile(time.Minute); err != nil {
+			log.Printf("failed to start profile; %v", err)
+		}
 
 		users = make(map[int64]*User)
 		usersName = make(map[string]*User)
