@@ -29,6 +29,7 @@ var (
 	cpuProfileFile    = "/tmp/cpu.pprof"
 	memProfileFile    = "/tmp/mem.pprof"
 	blockProfileFile  = "/tmp/block.pprof"
+	stackProfileFile  = "/tmp/stack.pprof"
 	onStartProfileCmd = "/opt/isucon/on-start-bench"
 )
 
@@ -46,6 +47,22 @@ func callOnStartProfile() {
 		log.Println("OnStartProfile command error:", err)
 	}
 	log.Printf("OnStartProfile Output: %s\n", out.String())
+}
+
+func startStackProfile() {
+	f, err := os.Create(stackProfileFile)
+	if err != nil {
+		log.Printf("failed to start stackprofile: %v", err)
+		return
+	}
+	defer f.Close()
+	prof := pprof.Lookup("goroutine")
+
+	for i := 0; i < 20; i++ {
+		time.Sleep(time.Second * 3)
+		f.WriteString("\n----\n")
+		prof.WriteTo(f, 1)
+	}
 }
 
 func StartProfile(duration time.Duration) error {
@@ -73,6 +90,7 @@ func StartProfile(duration time.Duration) error {
 	}
 	log.Println("Profile start")
 	go callOnStartProfile()
+	go startStackProfile()
 	return nil
 }
 
