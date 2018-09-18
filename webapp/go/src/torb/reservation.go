@@ -14,7 +14,7 @@ var (
 	NotReserved  = errors.New("not reserved")
 	NotOwner     = errors.New("not a valid owner")
 
-	mReservation       sync.Mutex
+	mReservation       sync.RWMutex
 	eventReservations  map[int64][]Reservation
 	eventReservedFlags map[int64][]int64
 )
@@ -55,8 +55,8 @@ func initReservation() {
 }
 
 func getReservationForEvent(eventID int64) ([]Reservation, []int64) {
-	mReservation.Lock()
-	defer mReservation.Unlock()
+	mReservation.RLock()
+	defer mReservation.RUnlock()
 	return eventReservations[eventID], eventReservedFlags[eventID]
 }
 
