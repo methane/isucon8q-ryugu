@@ -92,6 +92,16 @@ type Administrator struct {
 	PassHash  string `json:"pass_hash,omitempty"`
 }
 
+var thCh = make(chan struct{}, 1)
+
+// USAGE: defer throttle()()
+func throttle() func() {
+	thCh <- struct{}{}
+	return func() {
+		<-thCh
+	}
+}
+
 func sessUserID(c echo.Context) int64 {
 	sess, _ := session.Get("session", c)
 	var userID int64
@@ -439,6 +449,7 @@ func main() {
 		return c.NoContent(204)
 	})
 	e.POST("/api/users", func(c echo.Context) error {
+		defer throttle()()
 		var params struct {
 			Nickname  string `json:"nickname"`
 			LoginName string `json:"login_name"`
@@ -473,6 +484,7 @@ func main() {
 		})
 	})
 	e.GET("/api/users/:id", func(c echo.Context) error {
+		defer throttle()()
 		id, err := strconv.Atoi(c.Param("id"))
 		if err != nil {
 			return err
@@ -902,6 +914,7 @@ func main() {
 		return renderReportCSV(c, reports)
 	}, adminLoginRequired)
 	e.GET("/admin/api/reports/sales", func(c echo.Context) error {
+		defer throttle()()
 		rows, err := db.Query("select r.*, s.rank as sheet_rank, s.num as sheet_num, s.price as sheet_price, e.id as event_id, e.price as event_price from reservations r inner join sheets s on s.id = r.sheet_id inner join events e on e.id = r.event_id order by reserved_at asc")
 		if err != nil {
 			return err
