@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"html/template"
 	"io"
 	"log"
@@ -977,39 +978,24 @@ func main() {
 			}
 			reports = append(reports, report)
 		}
-		return renderReportCSV(c, reports)
+		b := renderReportCSV(reports)
+		c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
+		c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		c.Response().Write(b)
+		return nil
 	}, adminLoginRequired)
+	var salesG = singleflight.Group{}
 	e.GET("/admin/api/reports/sales", func(c echo.Context) error {
-		defer throttle()()
-		rows, err := db.Query("select r.*, e.id as event_id, e.price as event_price from reservations r inner join events e on e.id = r.event_id")
+		reportI, err, _ := salesG.Do("", makeReport)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		reportB := reportI.([]byte)
 
-		var reports []Report
-		for rows.Next() {
-			var reservation Reservation
-			var event Event
-			if err := rows.Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt, &event.ID, &event.Price); err != nil {
-				return err
-			}
-			sheet := sheetInfo(reservation.SheetID)
-			report := Report{
-				ReservationID: reservation.ID,
-				EventID:       event.ID,
-				Rank:          sheet.Rank,
-				Num:           sheet.Num,
-				UserID:        reservation.UserID,
-				SoldAt:        reservation.ReservedAt.Format("2006-01-02T15:04:05.000000Z"),
-				Price:         event.Price + sheet.Price,
-			}
-			if reservation.CanceledAt != nil {
-				report.CanceledAt = reservation.CanceledAt.Format("2006-01-02T15:04:05.000000Z")
-			}
-			reports = append(reports, report)
-		}
-		return renderReportCSV(c, reports)
+		c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
+		c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		c.Response().Write(reportB)
+		return nil
 	}, adminLoginRequired)
 
 	//os.Remove("/tmp/torb.sock")
@@ -1034,7 +1020,40 @@ type Report struct {
 	Price         int64
 }
 
-func renderReportCSV(c echo.Context, reports []Report) error {
+func makeReport() (interface{}, error) {
+	time.Sleep(time.Millisecond * 100)
+	rows, err := db.Query("select r.*, e.id as event_id, e.price as event_price from reservations r inner join events e on e.id = r.event_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reports []Report
+	for rows.Next() {
+		var reservation Reservation
+		var event Event
+		if err := rows.Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt, &event.ID, &event.Price); err != nil {
+			return nil, err
+		}
+		sheet := sheetInfo(reservation.SheetID)
+		report := Report{
+			ReservationID: reservation.ID,
+			EventID:       event.ID,
+			Rank:          sheet.Rank,
+			Num:           sheet.Num,
+			UserID:        reservation.UserID,
+			SoldAt:        reservation.ReservedAt.Format("2006-01-02T15:04:05.000000Z"),
+			Price:         event.Price + sheet.Price,
+		}
+		if reservation.CanceledAt != nil {
+			report.CanceledAt = reservation.CanceledAt.Format("2006-01-02T15:04:05.000000Z")
+		}
+		reports = append(reports, report)
+	}
+	return renderReportCSV(reports), nil
+}
+
+func renderReportCSV(reports []Report) []byte {
 	sort.Slice(reports, func(i, j int) bool { return strings.Compare(reports[i].SoldAt, reports[j].SoldAt) < 0 })
 
 	body := bytes.NewBufferString("reservation_id,event_id,rank,num,price,user_id,sold_at,canceled_at\n")
@@ -1042,11 +1061,7 @@ func renderReportCSV(c echo.Context, reports []Report) error {
 		body.WriteString(fmt.Sprintf("%d,%d,%s,%d,%d,%d,%s,%s\n",
 			v.ReservationID, v.EventID, v.Rank, v.Num, v.Price, v.UserID, v.SoldAt, v.CanceledAt))
 	}
-
-	c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
-	c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
-	_, err := io.Copy(c.Response(), body)
-	return err
+	return body.Bytes()
 }
 
 func resError(c echo.Context, e string, status int) error {

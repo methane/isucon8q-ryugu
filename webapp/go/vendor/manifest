@@ -116,6 +116,13 @@
 			"revision": "614d502a4dac94afa3a6ce146bd1736da82514c6",
 			"branch": "master",
 			"path": "/acme/autocert"
+		},
+		{
+			"importpath": "golang.org/x/sync/singleflight",
+			"repository": "https://go.googlesource.com/sync",
+			"revision": "1d60e4601c6fd243af51cc01ddf169918a5407ca",
+			"branch": "master",
+			"path": "/singleflight"
 		}
 	]
 }
