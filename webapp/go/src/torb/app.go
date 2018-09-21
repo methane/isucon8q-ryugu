@@ -417,7 +417,6 @@ func selectUserReservations(userID int64) ([]Reservation, error) {
 
 // /api/users/:id
 func get_api_user_id(c echo.Context) error {
-	defer throttle()()
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		return err
@@ -486,9 +485,6 @@ func get_api_user_id(c echo.Context) error {
 	}
 
 	var totalPrice int
-	//if err := db.QueryRow("SELECT IFNULL(SUM(e.price + s.price), 0) FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL", user.ID).Scan(&totalPrice); err != nil {
-	//	return err
-	//}
 	for _, r := range reservations {
 		if r.CanceledAt == nil {
 			continue
@@ -507,12 +503,6 @@ func get_api_user_id(c echo.Context) error {
 		}
 		totalPrice += int(event.Sheets[sheet.Rank].Price)
 	}
-
-	//rows, err = db.Query("SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5", user.ID)
-	//if err != nil {
-	//	return err
-	//}
-	//defer rows.Close()
 
 	var recentEvents []*Event = []*Event{}
 	for _, r := range reservations {
@@ -539,20 +529,6 @@ func get_api_user_id(c echo.Context) error {
 			}
 		}
 	}
-	//for rows.Next() {
-	//	var eventID int64
-	//	if err := rows.Scan(&eventID); err != nil {
-	//		return err
-	//	}
-	//	event, err := getEvent(eventID, -1, nil)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	for k := range event.Sheets {
-	//		event.Sheets[k].Detail = nil
-	//	}
-	//	recentEvents = append(recentEvents, event)
-	//}
 
 	return c.JSON(200, echo.Map{
 		"id":                  user.ID,
@@ -632,7 +608,6 @@ func main() {
 		return c.NoContent(204)
 	})
 	e.POST("/api/users", func(c echo.Context) error {
-		defer throttle()()
 		var params struct {
 			Nickname  string `json:"nickname"`
 			LoginName string `json:"login_name"`
