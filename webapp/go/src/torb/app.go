@@ -244,6 +244,22 @@ func getEvents(all bool) ([]*Event, error) {
 	return events, nil
 }
 
+func getEventsDetail(userID int64) ([]*Event, error) {
+	events, err := fetchEvents(true)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, v := range events {
+		event, err := getEvent(v.ID, userID, v)
+		if err != nil {
+			return nil, err
+		}
+		events[i] = event
+	}
+	return events, nil
+}
+
 func sheetInfo(id int64) Sheet {
 	switch {
 	case id <= 50:
@@ -366,7 +382,7 @@ func initdb() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	//db.SetMaxOpenConns(4)
+	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(400)
 	db.SetConnMaxLifetime(time.Minute * 10)
 
@@ -378,6 +394,173 @@ func initdb() {
 		log.Printf("Failed to PING db: %v", err)
 		time.Sleep(time.Second * 5)
 	}
+}
+
+func selectUserReservations(userID int64) ([]Reservation, error) {
+	rows, err := db.Query("SELECT * FROM reservations WHERE user_id = ?", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rs []Reservation
+	for rows.Next() {
+		var reservation Reservation
+		if err := rows.Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt); err != nil {
+			return nil, err
+		}
+		rs = append(rs, reservation)
+	}
+
+	return rs, nil
+}
+
+// /api/users/:id
+func get_api_user_id(c echo.Context) error {
+	defer throttle()()
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return err
+	}
+	user, ok := users[int64(id)]
+	if !ok {
+		return fmt.Errorf("user not found: %d", id)
+	}
+
+	loginUser, err := getLoginUser(c)
+	if err != nil {
+		return err
+	}
+	if user.ID != loginUser.ID {
+		return resError(c, "forbidden", 403)
+	}
+
+	reservations, err := selectUserReservations(user.ID)
+	sort.Slice(reservations, func(i, j int) bool {
+		l := reservations[i].CanceledAt
+		if l == nil {
+			l = reservations[i].ReservedAt
+		}
+
+		r := reservations[j].CanceledAt
+		if r == nil {
+			r = reservations[j].ReservedAt
+		}
+
+		return l.After(*r)
+	})
+	cr := len(reservations)
+	if cr > 5 {
+		cr = 5
+	}
+	recentReservations := make([]Reservation, cr)
+	copy(recentReservations, reservations)
+
+	events, err := getEventsDetail(user.ID)
+	if err != nil {
+		return err
+	}
+	eventMap := make(map[int64]*Event)
+	for _, e := range events {
+		eventMap[e.ID] = e
+	}
+
+	for i := range recentReservations {
+		pr := recentReservations[i]
+		event := *eventMap[pr.EventID]
+		sheet := sheetInfo(pr.SheetID)
+		price := event.Sheets[sheet.Rank].Price
+		event.Sheets = nil
+		event.Total = 0
+		event.Remains = 0
+
+		pr.Event = &event
+		pr.SheetRank = sheet.Rank
+		pr.SheetNum = sheet.Num
+		pr.Price = price
+		pr.ReservedAtUnix = pr.ReservedAt.Unix()
+		if pr.CanceledAt != nil {
+			pr.CanceledAtUnix = pr.CanceledAt.Unix()
+		}
+		recentReservations[i] = pr
+	}
+
+	var totalPrice int
+	//if err := db.QueryRow("SELECT IFNULL(SUM(e.price + s.price), 0) FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL", user.ID).Scan(&totalPrice); err != nil {
+	//	return err
+	//}
+	for _, r := range reservations {
+		if r.CanceledAt == nil {
+			continue
+		}
+		event := eventMap[r.EventID]
+		sheet := sheetInfo(r.SheetID)
+		if event == nil {
+			log.Printf("Unknown event id: %v in reservation %#v", r.EventID, r)
+			continue
+		}
+		if event.Sheets == nil {
+			panic("nil sheets")
+		}
+		if event.Sheets[sheet.Rank] == nil {
+			panic("nil sheets rank")
+		}
+		totalPrice += int(event.Sheets[sheet.Rank].Price)
+	}
+
+	//rows, err = db.Query("SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5", user.ID)
+	//if err != nil {
+	//	return err
+	//}
+	//defer rows.Close()
+
+	var recentEvents []*Event = []*Event{}
+	for _, r := range reservations {
+		eid := r.EventID
+		found := false
+		for _, e := range recentEvents {
+			if e.ID == eid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			e := eventMap[eid]
+			var ee Event = *e // カスタマイズのためにコピーを作る
+			ee.Sheets = make(map[string]*Sheets)
+			for k, v := range e.Sheets {
+				s := *v
+				s.Detail = nil
+				ee.Sheets[k] = &s
+			}
+			recentEvents = append(recentEvents, &ee)
+			if len(recentEvents) >= 5 {
+				break
+			}
+		}
+	}
+	//for rows.Next() {
+	//	var eventID int64
+	//	if err := rows.Scan(&eventID); err != nil {
+	//		return err
+	//	}
+	//	event, err := getEvent(eventID, -1, nil)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	for k := range event.Sheets {
+	//		event.Sheets[k].Detail = nil
+	//	}
+	//	recentEvents = append(recentEvents, event)
+	//}
+
+	return c.JSON(200, echo.Map{
+		"id":                  user.ID,
+		"nickname":            user.Nickname,
+		"recent_reservations": recentReservations,
+		"total_price":         totalPrice,
+		"recent_events":       recentEvents,
+	})
 }
 
 func main() {
@@ -421,7 +604,7 @@ func main() {
 			return nil
 		}
 
-		initdb()
+		//initdb()
 		initReservation()
 
 		if err := StartProfile(time.Minute); err != nil {
@@ -440,7 +623,7 @@ func main() {
 			var u User
 			if err := rows.Scan(&u.ID, &u.Nickname, &u.LoginName, &u.PassHash); err != nil {
 				fmt.Println(err)
-				c.NoContent(500)
+				return c.NoContent(500)
 			}
 			users[u.ID] = &u
 			usersName[u.LoginName] = &u
@@ -483,100 +666,7 @@ func main() {
 			"nickname": params.Nickname,
 		})
 	})
-	e.GET("/api/users/:id", func(c echo.Context) error {
-		defer throttle()()
-		id, err := strconv.Atoi(c.Param("id"))
-		if err != nil {
-			return err
-		}
-		user, ok := users[int64(id)]
-		if !ok {
-			return fmt.Errorf("user not found: %d", id)
-		}
-
-		loginUser, err := getLoginUser(c)
-		if err != nil {
-			return err
-		}
-		if user.ID != loginUser.ID {
-			return resError(c, "forbidden", 403)
-		}
-
-		rows, err := db.Query("SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id WHERE r.user_id = ? ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC LIMIT 5", user.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		var recentReservations []Reservation
-		for rows.Next() {
-			var reservation Reservation
-			var sheet Sheet
-			if err := rows.Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt, &sheet.Rank, &sheet.Num); err != nil {
-				return err
-			}
-
-			event, err := getEvent(reservation.EventID, -1, nil)
-			if err != nil {
-				return err
-			}
-			price := event.Sheets[sheet.Rank].Price
-			event.Sheets = nil
-			event.Total = 0
-			event.Remains = 0
-
-			reservation.Event = event
-			reservation.SheetRank = sheet.Rank
-			reservation.SheetNum = sheet.Num
-			reservation.Price = price
-			reservation.ReservedAtUnix = reservation.ReservedAt.Unix()
-			if reservation.CanceledAt != nil {
-				reservation.CanceledAtUnix = reservation.CanceledAt.Unix()
-			}
-			recentReservations = append(recentReservations, reservation)
-		}
-		if recentReservations == nil {
-			recentReservations = make([]Reservation, 0)
-		}
-
-		var totalPrice int
-		if err := db.QueryRow("SELECT IFNULL(SUM(e.price + s.price), 0) FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL", user.ID).Scan(&totalPrice); err != nil {
-			return err
-		}
-
-		rows, err = db.Query("SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5", user.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		var recentEvents []*Event
-		for rows.Next() {
-			var eventID int64
-			if err := rows.Scan(&eventID); err != nil {
-				return err
-			}
-			event, err := getEvent(eventID, -1, nil)
-			if err != nil {
-				return err
-			}
-			for k := range event.Sheets {
-				event.Sheets[k].Detail = nil
-			}
-			recentEvents = append(recentEvents, event)
-		}
-		if recentEvents == nil {
-			recentEvents = make([]*Event, 0)
-		}
-
-		return c.JSON(200, echo.Map{
-			"id":                  user.ID,
-			"nickname":            user.Nickname,
-			"recent_reservations": recentReservations,
-			"total_price":         totalPrice,
-			"recent_events":       recentEvents,
-		})
-	}, loginRequired)
+	e.GET("/api/users/:id", get_api_user_id, loginRequired)
 	e.POST("/api/actions/login", func(c echo.Context) error {
 		var params struct {
 			LoginName string `json:"login_name"`
@@ -732,6 +822,7 @@ func main() {
 			return resError(c, "not_reserved", 400)
 		}
 		if err == NotOwner {
+			log.Printf("DELETE rank=%v, num=%v", rank, num)
 			return resError(c, "not_permitted", 403)
 		}
 		if err != nil {
