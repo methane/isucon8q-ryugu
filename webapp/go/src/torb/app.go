@@ -1022,7 +1022,13 @@ type Report struct {
 
 func makeReport() (interface{}, error) {
 	time.Sleep(time.Millisecond * 100)
-	rows, err := db.Query("select r.*, e.id as event_id, e.price as event_price from reservations r inner join events e on e.id = r.event_id")
+	stmt, err := db.Prepare("select r.*, e.id as event_id, e.price as event_price from reservations r inner join events e on e.id = r.event_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := stmt.Query()
+	defer stmt.Close()
+	//rows, err := db.Query("select r.*, e.id as event_id, e.price as event_price from reservations r inner join events e on e.id = r.event_id")
 	if err != nil {
 		return nil, err
 	}
