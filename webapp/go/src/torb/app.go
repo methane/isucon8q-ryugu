@@ -587,6 +587,12 @@ func get_api_user_id(c echo.Context) error {
 	})
 }
 
+func validateEvent(eventID int64) (bool, error) {
+	var f bool
+	err := db.QueryRow("SELECT public_fg from events WHERE ID=?", eventID).Scan(&f)
+	return f, err
+}
+
 func main() {
 	var err error
 	initdb()
@@ -776,13 +782,14 @@ func main() {
 			return err
 		}
 
-		event, err := getEvent(eventID, user.ID, nil)
+		public, err := validateEvent(eventID)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return resError(c, "invalid_event", 404)
 			}
+			log.Println(err)
 			return err
-		} else if !event.PublicFg {
+		} else if !public {
 			return resError(c, "invalid_event", 404)
 		}
 
@@ -816,13 +823,14 @@ func main() {
 			return err
 		}
 
-		event, err := getEvent(eventID, user.ID, nil)
+		public, err := validateEvent(eventID)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return resError(c, "invalid_event", 404)
 			}
+			log.Println(err)
 			return err
-		} else if !event.PublicFg {
+		} else if !public {
 			return resError(c, "invalid_event", 404)
 		}
 
