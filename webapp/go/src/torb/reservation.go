@@ -268,6 +268,14 @@ func doReserveInternal(eventID, userID int64, rank string) (int64, int64, int64,
 }
 
 func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
+	id, now, err := cancelReservationInternal(eventID, sheetNum, userID, rank)
+	if err == nil {
+		_, err = db.Exec("UPDATE reservations SET canceled_at = ? WHERE id = ?", now.Format("2006-01-02 15:04:05.000000"), id)
+	}
+	return err
+}
+
+func cancelReservationInternal(eventID, sheetNum, userID int64, rank string) (int64, time.Time, error) {
 	var sheetID int64
 	switch rank {
 	case "S":
@@ -288,11 +296,11 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 	m, ok := eventReservedFlags[eventID]
 	if !ok || m[sheetID] == 0 {
 		log.Println("not reserved")
-		return NotReserved
+		return 0, time.Time{}, NotReserved
 	}
 	if m[sheetID] != userID {
 		log.Printf("not owner: owner=%v", m[sheetID])
-		return NotOwner
+		return 0, time.Time{}, NotOwner
 	}
 
 	var ri int
@@ -307,13 +315,13 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 	}
 
 	if rID == 0 {
-		return errors.New("XXX: BAD SheetNum")
+		return 0, time.Time{}, errors.New("XXX: BAD SheetNum")
 	}
 
 	now := time.Now().UTC()
-	if _, err := db2.Exec("UPDATE reservations SET canceled_at = ? WHERE id = ?", now.Format("2006-01-02 15:04:05.000000"), rID); err != nil {
-		return err
-	}
+	//if _, err := db2.Exec("UPDATE reservations SET canceled_at = ? WHERE id = ?", now.Format("2006-01-02 15:04:05.000000"), rID); err != nil {
+	//	return err
+	//}
 
 	rrr[ri] = rrr[len(rrr)-1]
 	rrr = rrr[:len(rrr)-1]
@@ -329,7 +337,7 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 
 	//log.Printf("canceled event=%v, sheetID=%v, sheetNum=%v, userID=%v",
 	//	eventID, sheetID, sheetNum, userID)
-	return nil
+	return rID, now, nil
 }
 
 func UpdateReport() {
