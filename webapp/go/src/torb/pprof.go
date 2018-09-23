@@ -77,7 +77,7 @@ func StartProfile(duration time.Duration) error {
 	if err := pprof.StartCPUProfile(f); err != nil {
 		return err
 	}
-	runtime.SetBlockProfileRate(1)
+	//runtime.SetBlockProfileRate(1)
 	isProfiling = true
 	if 0 < duration.Seconds() {
 		go func() {

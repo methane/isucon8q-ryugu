@@ -612,8 +612,7 @@ func main() {
 
 	var eventCache zerotimecache.Cache
 	e.GET("/", func(c echo.Context) error {
-		time.Sleep(time.Millisecond * 10)
-		events, err := eventCache.Do(func() (interface{}, error) {
+		events, err := eventCache.DoDelay(time.Millisecond*30, func() (interface{}, error) {
 			events, err := getEvents(false)
 			if err != nil {
 				return nil, err
@@ -743,6 +742,7 @@ func main() {
 		return c.JSON(200, events)
 	})
 	e.GET("/api/events/:id", func(c echo.Context) error {
+		time.Sleep(time.Millisecond * 30)
 		eventID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
 			return resError(c, "not_found", 404)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/methane/zerotimecache"
 )
 
 var (
@@ -19,6 +21,7 @@ var (
 	mReservation       sync.RWMutex
 	eventReservations  map[int64][]Reservation
 	eventReservedFlags map[int64][]int64
+	maxIndex           int64
 
 	mDiffLog     sync.Mutex
 	logReserved  []Reservation
@@ -107,7 +110,12 @@ func initReservation() {
 			eventReservations[r.EventID] = append(eventReservations[r.EventID], r)
 		}
 		reportData = append(reportData, ReportCache{ID: r.ID, SoldAt: *r.ReservedAt, Rendered: formatReport(r, priceMap[r.EventID])})
+
+		if r.ID > maxIndex {
+			maxIndex = r.ID
+		}
 	}
+	maxIndex++
 
 	reportIndex = make(map[int64]int)
 	sort.Slice(reportData, func(i, j int) bool { return reportData[i].SoldAt.Before(reportData[j].SoldAt) })
@@ -124,6 +132,60 @@ func initReservation() {
 	}
 }
 
+type insertData struct {
+	id      int64
+	eventID int64
+	sheetID int64
+	userID  int64
+	now     time.Time
+}
+
+var (
+	lazyInsertM      sync.Mutex
+	lazyInsertValues []insertData
+	lazyInsertZ      zerotimecache.Cache
+)
+
+func lazyInsert(id, eventID, sheetID, userID int64, now time.Time) {
+	lazyInsertM.Lock()
+	lazyInsertValues = append(lazyInsertValues,
+		insertData{id: id, eventID: eventID, sheetID: sheetID, userID: userID, now: now})
+	lazyInsertM.Unlock()
+
+	lazyInsertZ.Do(func() (interface{}, error) {
+		lazyInsertM.Lock()
+		values := lazyInsertValues
+		lazyInsertValues = nil
+		lazyInsertM.Unlock()
+
+		nvalues := len(values)
+		if nvalues == 0 {
+			return nil, nil
+		}
+
+		var queryBuilder strings.Builder
+		queryBuilder.WriteString("INSERT INTO reservations (id, event_id, sheet_id, user_id, reserved_at) VALUES ")
+		for i := 0; i < nvalues; i++ {
+			queryBuilder.WriteString("(?, ?, ?, ?, ?),") // ケツカンマは後で消す.
+		}
+		query := queryBuilder.String()
+		query = query[:len(query)-1]
+
+		var args []interface{}
+		for _, v := range values {
+			args = append(args, v.id, v.eventID, v.sheetID, v.userID, now)
+		}
+
+		//log.Println(query)
+		//log.Println(args)
+		_, err := db.Exec(query, args...)
+		if err != nil {
+			log.Printf("failed to insert reservation: %v", err)
+		}
+		return nil, err
+	})
+}
+
 func getReservationForEvent(eventID int64) ([]Reservation, []int64) {
 	mReservation.RLock()
 	defer mReservation.RUnlock()
@@ -131,6 +193,15 @@ func getReservationForEvent(eventID int64) ([]Reservation, []int64) {
 }
 
 func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
+	id, sheetID, sheetNum, now, err := doReserveInternal(eventID, userID, rank)
+	if err != nil {
+		return 0, 0, err
+	}
+	lazyInsert(id, eventID, sheetID, userID, now)
+	return id, sheetNum, err
+}
+
+func doReserveInternal(eventID, userID int64, rank string) (int64, int64, int64, time.Time, error) {
 	mReservation.Lock()
 	defer mReservation.Unlock()
 
@@ -176,22 +247,12 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 		}
 	}
 	if sheetID == 0 {
-		return 0, 0, FullReserved
+		return 0, 0, 0, time.Time{}, FullReserved
 	}
 
 	now := time.Now().UTC()
-	res, err := db2.Exec("INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)",
-		eventID, sheetID, userID, now.Format("2006-01-02 15:04:05.000000"))
-
-	if err != nil {
-		log.Printf("failed to insert reservation: %v", err)
-		return 0, 0, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		log.Printf("failed to insert reservation: %v", err)
-		return 0, 0, err
-	}
+	id := maxIndex
+	maxIndex++
 
 	num := sheetID - start + 1
 	//log.Printf("reserved event=%v, sheetID=%v, sheetNum=%v, userID=%v",
@@ -203,7 +264,7 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	mDiffLog.Lock()
 	logReserved = append(logReserved, newResv)
 	mDiffLog.Unlock()
-	return id, num, nil
+	return id, sheetID, num, now, nil
 }
 
 func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
