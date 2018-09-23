@@ -616,14 +616,15 @@ func main() {
 			for i, v := range events {
 				events[i] = sanitizeEvent(v)
 			}
-			return events, nil
+			js, _ := json.Marshal(events)
+			return string(js), nil
 		})
 		if err != nil {
 			return err
 		}
 
 		return c.Render(200, "index.tmpl", echo.Map{
-			"events": events.([]*Event),
+			"events": events.(string),
 			"user":   c.Get("user"),
 			"origin": c.Scheme() + "://" + c.Request().Host,
 		})
