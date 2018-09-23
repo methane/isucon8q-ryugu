@@ -92,6 +92,12 @@
 			"branch": "master"
 		},
 		{
+			"importpath": "github.com/methane/zerotimecache",
+			"repository": "https://github.com/methane/zerotimecache",
+			"revision": "a01266184f550367f49759518f95d1cfa632b321",
+			"branch": "master"
+		},
+		{
 			"importpath": "github.com/valyala/bytebufferpool",
 			"repository": "https://github.com/valyala/bytebufferpool",
 			"revision": "e746df99fe4a3986f4d4f79e13c1e0117ce9c2f7",

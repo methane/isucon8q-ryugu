@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
-	//"sort"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,18 +19,79 @@ var (
 	mReservation       sync.RWMutex
 	eventReservations  map[int64][]Reservation
 	eventReservedFlags map[int64][]int64
+
+	mDiffLog     sync.Mutex
+	logReserved  []Reservation
+	logCancelled []CancelLog
+
+	mReport     sync.Mutex
+	reportData  []ReportCache
+	reportIndex map[int64]int
 )
+
+type ReportCache struct {
+	ID       int64
+	SoldAt   time.Time
+	Rendered string
+}
+type CancelLog struct {
+	ID int64
+	At time.Time
+}
+
+const reportTimeFormat = "2006-01-02T15:04:05.000000Z"
+
+func formatReport(r Reservation, price int64) string {
+	s := sheetInfo(r.SheetID)
+	price += s.Price
+	soldAt := r.ReservedAt.Format(reportTimeFormat)
+	canceledAt := ""
+	if r.CanceledAt != nil {
+		canceledAt = r.CanceledAt.Format(reportTimeFormat)
+	}
+	return fmt.Sprintf("%d,%d,%s,%d,%d,%d,%s,%s\n",
+		r.ID, r.EventID, s.Rank, s.Num, price, r.UserID, soldAt, canceledAt)
+}
+
+func initEventPrice() map[int64]int64 {
+	query := "SELECT id, price FROM events"
+	rows, err := db.Query(query)
+	for err != nil {
+		log.Println(err)
+		rows, err = db.Query(query)
+	}
+	defer rows.Close()
+
+	ps := make(map[int64]int64)
+	for rows.Next() {
+		var id, price int64
+		err := rows.Scan(&id, &price)
+		if err != nil {
+			panic(err)
+		}
+		ps[id] = price
+	}
+
+	return ps
+}
 
 func initReservation() {
 	mReservation.Lock()
 	defer mReservation.Unlock()
+	mDiffLog.Lock()
+	defer mDiffLog.Unlock()
+
 	eventReservations = make(map[int64][]Reservation)
 	eventReservedFlags = make(map[int64][]int64)
+	priceMap := initEventPrice()
 
-	rows, err := db.Query("SELECT * FROM reservations WHERE canceled_at IS NULL")
-	if err != nil {
-		panic(err)
+	query := "SELECT * FROM reservations"
+	rows, err := db.Query(query)
+	for err != nil {
+		log.Println(err)
+		rows, err = db.Query(query)
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		var r Reservation
@@ -36,18 +99,21 @@ func initReservation() {
 		if err != nil {
 			panic(err)
 		}
-		eventReservations[r.EventID] = append(eventReservations[r.EventID], r)
+		if r.CanceledAt == nil {
+			eventReservations[r.EventID] = append(eventReservations[r.EventID], r)
+		}
+		reportData = append(reportData, ReportCache{ID: r.ID, SoldAt: *r.ReservedAt, Rendered: formatReport(r, priceMap[r.EventID])})
+	}
+
+	reportIndex = make(map[int64]int)
+	sort.Slice(reportData, func(i, j int) bool { return reportData[i].SoldAt.Before(reportData[j].SoldAt) })
+	for i, r := range reportData {
+		reportIndex[r.ID] = i
 	}
 
 	for eid := range eventReservations {
 		eventReservedFlags[eid] = make([]int64, 1001)
-
 		rr := eventReservations[eid]
-		//sort.Slice(rr, func(i, j int) bool {
-		//	return rr[i].SheetID < rr[j].SheetID
-		//})
-		//eventReservations[eid] = rr
-
 		for _, r := range rr {
 			eventReservedFlags[eid][r.SheetID] = r.UserID
 		}
@@ -126,9 +192,13 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	num := sheetID - start + 1
 	//log.Printf("reserved event=%v, sheetID=%v, sheetNum=%v, userID=%v",
 	//	eventID, sheetID, num, userID)
+	newResv := Reservation{ID: id, EventID: eventID, SheetID: sheetID, UserID: userID, ReservedAt: &now}
 	eventReservedFlags[eventID][sheetID] = userID
-	eventReservations[eventID] = append(
-		eventReservations[eventID], Reservation{ID: id, EventID: eventID, SheetID: sheetID, UserID: userID, ReservedAt: &now})
+	eventReservations[eventID] = append(eventReservations[eventID], newResv)
+
+	mDiffLog.Lock()
+	logReserved = append(logReserved, newResv)
+	mDiffLog.Unlock()
 	return id, num, nil
 }
 
@@ -163,7 +233,8 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 	var ri int
 	var rID int64
 	var r Reservation
-	for ri, r = range eventReservations[eventID] {
+	rrr := eventReservations[eventID]
+	for ri, r = range rrr {
 		if r.SheetID == sheetID {
 			rID = r.ID
 			break
@@ -179,12 +250,49 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 		return err
 	}
 
-	eventReservations[eventID] = append(
-		eventReservations[eventID][:ri],
-		eventReservations[eventID][ri+1:]...)
+	rrr[ri] = rrr[len(rrr)-1]
+	rrr = rrr[:len(rrr)-1]
+	eventReservations[eventID] = rrr
+	//	eventReservations[eventID] = append(
+	//		eventReservations[eventID][:ri],
+	//		eventReservations[eventID][ri+1:]...)
 	eventReservedFlags[eventID][sheetID] = 0
+
+	mDiffLog.Lock()
+	logCancelled = append(logCancelled, CancelLog{ID: rID, At: now})
+	mDiffLog.Unlock()
 
 	//log.Printf("canceled event=%v, sheetID=%v, sheetNum=%v, userID=%v",
 	//	eventID, sheetID, sheetNum, userID)
 	return nil
+}
+
+func UpdateReport() {
+	priceMap := initEventPrice()
+
+	mDiffLog.Lock()
+	newResv := logReserved
+	logReserved = nil
+	newCancels := logCancelled
+	logCancelled = nil
+	mDiffLog.Unlock()
+
+	mReport.Lock()
+	defer mReport.Unlock()
+
+	for _, r := range newResv {
+		s := formatReport(r, priceMap[r.EventID])
+		reportIndex[r.ID] = len(reportData)
+		reportData = append(reportData, ReportCache{ID: r.ID, Rendered: s})
+	}
+
+	for _, c := range newCancels {
+		ix := reportIndex[c.ID]
+		rs := reportData[ix].Rendered
+		var b strings.Builder
+		b.WriteString(rs[:len(rs)-1]) // trim \n
+		b.WriteString(c.At.Format(reportTimeFormat))
+		b.WriteRune('\n')
+		reportData[ix].Rendered = b.String()
+	}
 }

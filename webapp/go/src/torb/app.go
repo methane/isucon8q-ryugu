@@ -2,12 +2,12 @@ package main
 
 import (
 	"bytes"
+	//"compress/gzip"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/singleflight"
 	"html/template"
 	"io"
 	"log"
@@ -24,6 +24,8 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
+	"github.com/methane/zerotimecache"
+	"golang.org/x/sync/singleflight"
 )
 
 var (
@@ -233,12 +235,9 @@ func getEvents(all bool) ([]*Event, error) {
 	}
 
 	for i, v := range events {
-		event, err := getEvent(v.ID, -1, v)
+		event, err := getEventSimple(v.ID, -1, v)
 		if err != nil {
 			return nil, err
-		}
-		for k := range event.Sheets {
-			event.Sheets[k].Detail = nil
 		}
 		events[i] = event
 	}
@@ -317,6 +316,52 @@ func getEvent(eventID, loginUserID int64, ev *Event) (*Event, error) {
 		}
 
 		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
+	}
+
+	return &event, nil
+}
+
+func getEventSimple(eventID, loginUserID int64, ev *Event) (*Event, error) {
+	var event Event
+	if ev == nil {
+		if err := db.QueryRow("SELECT * FROM events WHERE id = ?", eventID).Scan(&event.ID, &event.Title, &event.PublicFg, &event.ClosedFg, &event.Price); err != nil {
+			return nil, err
+		}
+	} else {
+		event = *ev
+	}
+	event.Sheets = map[string]*Sheets{
+		"S": &Sheets{},
+		"A": &Sheets{},
+		"B": &Sheets{},
+		"C": &Sheets{},
+	}
+
+	reservations, reservedSheets := getReservationForEvent(eventID)
+	if len(reservedSheets) == 0 {
+		reservedSheets = make([]int64, 1001)
+	}
+
+	reservedAtMap := make(map[int64]int64)
+	for _, r := range reservations {
+		reservedAtMap[r.SheetID] = r.ReservedAt.Unix()
+	}
+
+	var sheetID int64
+	for sheetID = 1; sheetID <= 1000; sheetID++ {
+		sheet := sheetInfo(sheetID)
+		event.Sheets[sheet.Rank].Price = event.Price + sheet.Price
+		event.Total++
+		event.Sheets[sheet.Rank].Total++
+
+		if reservedSheets[sheetID] != 0 {
+			sheet.Mine = reservedSheets[sheetID] == loginUserID
+			sheet.Reserved = true
+			sheet.ReservedAtUnix = reservedAtMap[sheetID]
+		} else {
+			event.Remains++
+			event.Sheets[sheet.Rank].Remains++
+		}
 	}
 
 	return &event, nil
@@ -558,16 +603,25 @@ func main() {
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("secret"))))
 	//e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{Output: os.Stderr}))
 	e.Static("/", "public")
+
+	var eventCache zerotimecache.Cache
 	e.GET("/", func(c echo.Context) error {
-		events, err := getEvents(false)
+		events, err := eventCache.Do(func() (interface{}, error) {
+			events, err := getEvents(false)
+			if err != nil {
+				return nil, err
+			}
+			for i, v := range events {
+				events[i] = sanitizeEvent(v)
+			}
+			return events, nil
+		})
 		if err != nil {
 			return err
 		}
-		for i, v := range events {
-			events[i] = sanitizeEvent(v)
-		}
+
 		return c.Render(200, "index.tmpl", echo.Map{
-			"events": events,
+			"events": events.([]*Event),
 			"user":   c.Get("user"),
 			"origin": c.Scheme() + "://" + c.Request().Host,
 		})
@@ -978,14 +1032,27 @@ func main() {
 			}
 			reports = append(reports, report)
 		}
-		b := renderReportCSV(reports)
 		c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
 		c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
-		c.Response().Write(b)
+		renderReportCSV(reports, c.Response())
 		return nil
 	}, adminLoginRequired)
 	var salesG = singleflight.Group{}
 	e.GET("/admin/api/reports/sales", func(c echo.Context) error {
+		reportI, err, _ := salesG.Do("", makeReport2)
+		if err != nil {
+			return err
+		}
+		reportB := reportI.([]byte)
+
+		c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
+		c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		//c.Response().Header().Set("Content-Encoding", "gzip")
+		c.Response().Write(reportB)
+		return nil
+	}, adminLoginRequired)
+
+	e.GET("/debug/report1", func(c echo.Context) error {
 		reportI, err, _ := salesG.Do("", makeReport)
 		if err != nil {
 			return err
@@ -994,9 +1061,24 @@ func main() {
 
 		c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
 		c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		//c.Response().Header().Set("Content-Encoding", "gzip")
 		c.Response().Write(reportB)
 		return nil
-	}, adminLoginRequired)
+	})
+
+	e.GET("/debug/report2", func(c echo.Context) error {
+		reportI, err, _ := salesG.Do("", makeReport2)
+		if err != nil {
+			return err
+		}
+		reportB := reportI.([]byte)
+
+		c.Response().Header().Set("Content-Type", `text/csv; charset=UTF-8`)
+		c.Response().Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		//c.Response().Header().Set("Content-Encoding", "gzip")
+		c.Response().Write(reportB)
+		return nil
+	})
 
 	//os.Remove("/tmp/torb.sock")
 	//ln, err := net.Listen("unix", "/tmp/torb.sock")
@@ -1018,6 +1100,22 @@ type Report struct {
 	SoldAt        string
 	CanceledAt    string
 	Price         int64
+}
+
+func makeReport2() (interface{}, error) {
+	time.Sleep(time.Millisecond * 300)
+
+	UpdateReport()
+
+	mReport.Lock()
+	buf := bytes.Buffer{}
+	buf.WriteString("reservation_id,event_id,rank,num,price,user_id,sold_at,canceled_at\n")
+	for _, rc := range reportData {
+		buf.WriteString(rc.Rendered)
+	}
+	mReport.Unlock()
+
+	return buf.Bytes(), nil
 }
 
 func makeReport() (interface{}, error) {
@@ -1056,10 +1154,14 @@ func makeReport() (interface{}, error) {
 		}
 		reports = append(reports, report)
 	}
-	return renderReportCSV(reports), nil
+	buf := bytes.Buffer{}
+	//w, _ := gzip.NewWriterLevel(&buf, 3)
+	renderReportCSV(reports, &buf)
+	//w.Close()
+	return buf.Bytes(), nil
 }
 
-func renderReportCSV(reports []Report) []byte {
+func renderReportCSV(reports []Report, w io.Writer) {
 	sort.Slice(reports, func(i, j int) bool { return strings.Compare(reports[i].SoldAt, reports[j].SoldAt) < 0 })
 
 	body := bytes.NewBufferString("reservation_id,event_id,rank,num,price,user_id,sold_at,canceled_at\n")
@@ -1067,7 +1169,7 @@ func renderReportCSV(reports []Report) []byte {
 		body.WriteString(fmt.Sprintf("%d,%d,%s,%d,%d,%d,%s,%s\n",
 			v.ReservationID, v.EventID, v.Rank, v.Num, v.Price, v.UserID, v.SoldAt, v.CanceledAt))
 	}
-	return body.Bytes()
+	body.WriteTo(w)
 }
 
 func resError(c echo.Context, e string, status int) error {
