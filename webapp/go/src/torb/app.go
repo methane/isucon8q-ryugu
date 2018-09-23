@@ -283,10 +283,10 @@ func getEvent(eventID, loginUserID int64, ev *Event) (*Event, error) {
 		event = *ev
 	}
 	event.Sheets = map[string]*Sheets{
-		"S": &Sheets{},
-		"A": &Sheets{},
-		"B": &Sheets{},
-		"C": &Sheets{},
+		"S": &Sheets{Total: 50, Remains: 50, Price: 5000 + event.Price},
+		"A": &Sheets{Total: 150, Remains: 150, Price: 3000 + event.Price},
+		"B": &Sheets{Total: 300, Remains: 300, Price: 1000 + event.Price},
+		"C": &Sheets{Total: 500, Remains: 500, Price: event.Price},
 	}
 
 	reservations, reservedSheets := getReservationForEvent(eventID)
@@ -294,28 +294,24 @@ func getEvent(eventID, loginUserID int64, ev *Event) (*Event, error) {
 		reservedSheets = make([]int64, 1001)
 	}
 
-	reservedAtMap := make(map[int64]int64)
-	for _, r := range reservations {
-		reservedAtMap[r.SheetID] = r.ReservedAt.Unix()
-	}
+	event.Total = 1000
+	event.Remains = 1000 - len(reservations)
 
 	var sheetID int64
 	for sheetID = 1; sheetID <= 1000; sheetID++ {
 		sheet := sheetInfo(sheetID)
-		event.Sheets[sheet.Rank].Price = event.Price + sheet.Price
-		event.Total++
-		event.Sheets[sheet.Rank].Total++
-
-		if reservedSheets[sheetID] != 0 {
-			sheet.Mine = reservedSheets[sheetID] == loginUserID
-			sheet.Reserved = true
-			sheet.ReservedAtUnix = reservedAtMap[sheetID]
-		} else {
-			event.Remains++
-			event.Sheets[sheet.Rank].Remains++
-		}
-
 		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
+	}
+
+	for _, r := range reservations {
+		sheet := sheetInfo(r.SheetID)
+		sheet.Mine = reservedSheets[r.SheetID] == loginUserID
+		sheet.Reserved = true
+		sheet.ReservedAtUnix = r.ReservedAt.Unix()
+
+		ss := event.Sheets[sheet.Rank]
+		ss.Remains--
+		ss.Detail[sheet.Num-1] = &sheet
 	}
 
 	return &event, nil
@@ -644,9 +640,9 @@ func main() {
 		//initdb()
 		initReservation()
 
-		//if err := StartProfile(time.Minute); err != nil {
-		//	log.Printf("failed to start profile; %v", err)
-		//}
+		if err := StartProfile(time.Minute); err != nil {
+			log.Printf("failed to start profile; %v", err)
+		}
 
 		users = make(map[int64]*User)
 		usersName = make(map[string]*User)
