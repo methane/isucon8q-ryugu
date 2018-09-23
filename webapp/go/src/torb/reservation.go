@@ -85,6 +85,10 @@ func initReservation() {
 	eventReservedFlags = make(map[int64][]int64)
 	priceMap := initEventPrice()
 
+	logReserved = nil
+	logCancelled = nil
+	reportData = nil
+
 	query := "SELECT * FROM reservations"
 	rows, err := db.Query(query)
 	for err != nil {
@@ -176,7 +180,7 @@ func doReserve(eventID, userID int64, rank string) (int64, int64, error) {
 	}
 
 	now := time.Now().UTC()
-	res, err := db.Exec("INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)",
+	res, err := db2.Exec("INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)",
 		eventID, sheetID, userID, now.Format("2006-01-02 15:04:05.000000"))
 
 	if err != nil {
@@ -246,7 +250,7 @@ func cancelReservation(eventID, sheetNum, userID int64, rank string) error {
 	}
 
 	now := time.Now().UTC()
-	if _, err := db.Exec("UPDATE reservations SET canceled_at = ? WHERE id = ?", now.Format("2006-01-02 15:04:05.000000"), rID); err != nil {
+	if _, err := db2.Exec("UPDATE reservations SET canceled_at = ? WHERE id = ?", now.Format("2006-01-02 15:04:05.000000"), rID); err != nil {
 		return err
 	}
 

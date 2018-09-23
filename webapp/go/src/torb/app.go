@@ -411,6 +411,7 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 }
 
 var db *sql.DB
+var db2 *sql.DB
 
 func initdb() {
 	if db != nil {
@@ -439,6 +440,11 @@ func initdb() {
 		}
 		log.Printf("Failed to PING db: %v", err)
 		time.Sleep(time.Second * 5)
+	}
+
+	db2, err = sql.Open("mysql", dsn)
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -606,6 +612,7 @@ func main() {
 
 	var eventCache zerotimecache.Cache
 	e.GET("/", func(c echo.Context) error {
+		time.Sleep(time.Millisecond * 10)
 		events, err := eventCache.Do(func() (interface{}, error) {
 			events, err := getEvents(false)
 			if err != nil {
