@@ -11,7 +11,7 @@ import (
 	"html/template"
 	"io"
 	"log"
-	//"net"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
@@ -34,6 +34,11 @@ var (
 	userLock  sync.Mutex
 )
 
+var (
+	eventLock sync.Mutex
+	eventOk   map[int64]bool
+)
+
 type User struct {
 	ID        int64  `json:"id,omitempty"`
 	Nickname  string `json:"nickname,omitempty"`
@@ -54,10 +59,10 @@ type Event struct {
 }
 
 type Sheets struct {
-	Total   int      `json:"total"`
-	Remains int      `json:"remains"`
-	Detail  []*Sheet `json:"detail,omitempty"`
-	Price   int64    `json:"price"`
+	Total   int     `json:"total"`
+	Remains int     `json:"remains"`
+	Detail  []Sheet `json:"detail,omitempty"`
+	Price   int64   `json:"price"`
 }
 
 type Sheet struct {
@@ -297,10 +302,14 @@ func getEvent(eventID, loginUserID int64, ev *Event) (*Event, error) {
 	event.Total = 1000
 	event.Remains = 1000 - len(reservations)
 
-	var sheetID int64
-	for sheetID = 1; sheetID <= 1000; sheetID++ {
-		sheet := sheetInfo(sheetID)
-		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
+	event.Sheets["S"].Detail = make([]Sheet, 50)
+	event.Sheets["A"].Detail = make([]Sheet, 150)
+	event.Sheets["B"].Detail = make([]Sheet, 300)
+	event.Sheets["C"].Detail = make([]Sheet, 500)
+
+	for sheetID := 1; sheetID <= 1000; sheetID++ {
+		sheet := sheetInfo(int64(sheetID))
+		event.Sheets[sheet.Rank].Detail[sheet.Num-1] = sheet
 	}
 
 	for _, r := range reservations {
@@ -311,7 +320,7 @@ func getEvent(eventID, loginUserID int64, ev *Event) (*Event, error) {
 
 		ss := event.Sheets[sheet.Rank]
 		ss.Remains--
-		ss.Detail[sheet.Num-1] = &sheet
+		ss.Detail[sheet.Num-1] = sheet
 	}
 
 	return &event, nil
@@ -588,15 +597,25 @@ func get_api_user_id(c echo.Context) error {
 }
 
 func validateEvent(eventID int64) (bool, error) {
-	var f bool
-	err := db.QueryRow("SELECT public_fg from events WHERE ID=?", eventID).Scan(&f)
-	return f, err
+	//var f bool
+	//err := db.QueryRow("SELECT public_fg from events WHERE ID=?", eventID).Scan(&f)
+	//return f, err
+	eventLock.Lock()
+	pub, ok := eventOk[eventID]
+	eventLock.Unlock()
+
+	var err error = nil
+	if !ok {
+		err = sql.ErrNoRows
+	}
+	return pub, err
 }
 
 func main() {
 	var err error
 	initdb()
 	initReservation()
+	resetEvents()
 
 	e := echo.New()
 	funcs := template.FuncMap{
@@ -614,7 +633,7 @@ func main() {
 
 	var eventCache zerotimecache.Cache
 	e.GET("/", func(c echo.Context) error {
-		events, err := eventCache.DoDelay(time.Millisecond*30, func() (interface{}, error) {
+		events, err := eventCache.DoDelay(time.Millisecond*100, func() (interface{}, error) {
 			events, err := getEvents(false)
 			if err != nil {
 				return nil, err
@@ -646,6 +665,7 @@ func main() {
 
 		//initdb()
 		initReservation()
+		resetEvents()
 
 		if err := StartProfile(time.Minute); err != nil {
 			log.Printf("failed to start profile; %v", err)
@@ -946,6 +966,10 @@ func main() {
 			return err
 		}
 
+		eventLock.Lock()
+		eventOk[eventID] = params.Public
+		eventLock.Unlock()
+
 		event, err := getEvent(eventID, -1, nil)
 		if err != nil {
 			return err
@@ -998,6 +1022,10 @@ func main() {
 		if _, err := db.Exec("UPDATE events SET public_fg = ?, closed_fg = ? WHERE id = ?", params.Public, params.Closed, event.ID); err != nil {
 			return err
 		}
+
+		eventLock.Lock()
+		eventOk[event.ID] = params.Public
+		eventLock.Unlock()
 
 		e, err := getEvent(eventID, -1, nil)
 		if err != nil {
@@ -1092,15 +1120,15 @@ func main() {
 		return nil
 	})
 
-	//os.Remove("/tmp/torb.sock")
-	//ln, err := net.Listen("unix", "/tmp/torb.sock")
-	//if err != nil {
-	//	panic(err)
-	//}
-	//e.Listener = ln
-	//log.Print(os.Chmod("/tmp/torb.sock", 0777))
-	//log.Print(e.Start(""))
-	log.Print(e.Start(":8080"))
+	os.Remove("/tmp/torb.sock")
+	ln, err := net.Listen("unix", "/tmp/torb.sock")
+	if err != nil {
+		panic(err)
+	}
+	e.Listener = ln
+	log.Print(os.Chmod("/tmp/torb.sock", 0777))
+	log.Print(e.Start(""))
+	//log.Print(e.Start(":8080"))
 }
 
 type Report struct {
@@ -1192,4 +1220,23 @@ func resError(c echo.Context, e string, status int) error {
 		status = 500
 	}
 	return c.JSON(status, map[string]string{"error": e})
+}
+
+func resetEvents() {
+	rows, err := db.Query("SELECT id, public_fg from events")
+	for err != nil {
+		rows, err = db.Query("SELECT id, public_fg from events")
+	}
+	defer rows.Close()
+
+	eventLock.Lock()
+	eventOk = make(map[int64]bool)
+
+	for rows.Next() {
+		var i int64
+		var b bool
+		rows.Scan(&i, &b)
+		eventOk[i] = b
+	}
+	eventLock.Unlock()
 }
