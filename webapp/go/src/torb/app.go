@@ -416,7 +416,6 @@ func (r *Renderer) Render(w io.Writer, name string, data interface{}, c echo.Con
 }
 
 var db *sql.DB
-var db2 *sql.DB
 
 func initdb() {
 	if db != nil {
@@ -434,9 +433,9 @@ func initdb() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.SetMaxOpenConns(4)
+	db.SetMaxOpenConns(16)
 	db.SetMaxIdleConns(400)
-	db.SetConnMaxLifetime(time.Minute * 10)
+	db.SetConnMaxLifetime(time.Minute * 2)
 
 	for {
 		err := db.Ping()
@@ -445,11 +444,6 @@ func initdb() {
 		}
 		log.Printf("Failed to PING db: %v", err)
 		time.Sleep(time.Second * 5)
-	}
-
-	db2, err = sql.Open("mysql", dsn)
-	if err != nil {
-		log.Fatal(err)
 	}
 }
 
@@ -633,7 +627,7 @@ func main() {
 
 	var eventCache zerotimecache.Cache
 	e.GET("/", func(c echo.Context) error {
-		events, err := eventCache.DoDelay(time.Millisecond*100, func() (interface{}, error) {
+		events, err := eventCache.DoDelay(time.Millisecond*50, func() (interface{}, error) {
 			events, err := getEvents(false)
 			if err != nil {
 				return nil, err
@@ -667,9 +661,9 @@ func main() {
 		initReservation()
 		resetEvents()
 
-		if err := StartProfile(time.Minute); err != nil {
-			log.Printf("failed to start profile; %v", err)
-		}
+		//if err := StartProfile(time.Minute); err != nil {
+		//	log.Printf("failed to start profile; %v", err)
+		//}
 
 		users = make(map[int64]*User)
 		usersName = make(map[string]*User)
@@ -765,7 +759,7 @@ func main() {
 		return c.JSON(200, events)
 	})
 	e.GET("/api/events/:id", func(c echo.Context) error {
-		time.Sleep(time.Millisecond * 30)
+		time.Sleep(time.Millisecond * 20)
 		eventID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
 			return resError(c, "not_found", 404)
